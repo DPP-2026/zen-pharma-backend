@@ -3,7 +3,5 @@ WORKDIR /app
 RUN groupadd -r pharma && useradd -r -g pharma pharma
 COPY target/*.jar app.jar
 USER pharma
-EXPOSE 8081
+EXPOSE 8086
 ENTRYPOINT ["java", "-jar", "-Djava.security.egd=file:/dev/./urandom", "app.jar"]
-
-

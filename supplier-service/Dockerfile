@@ -6,3 +6,4 @@ USER pharma
 EXPOSE 8084
 ENTRYPOINT ["java", "-jar", "-Djava.security.egd=file:/dev/./urandom", "app.jar"]
 
+

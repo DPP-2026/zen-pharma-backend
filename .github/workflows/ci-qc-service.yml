@@ -1,0 +1,160 @@
+name: CI/CD — qc-service
+
+on:
+  push:
+    branches: [develop, 'release/**']
+    paths:
+      - 'qc-service/**'
+      - '.github/workflows/ci-qc-service.yml'
+
+permissions:
+  id-token: write
+  contents: read
+  security-events: write
+  actions: read
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: qc-service
+  GITOPS_REPO: ${{ vars.GITOPS_REPO }}
+
+jobs:
+
+  build:
+    name: Build & Security Gates
+    uses: ./.github/workflows/_java-build.yml
+    with:
+      service-name: qc-service
+      service-dir: qc-service
+      ecr-repository: qc-service
+      aws-region: us-east-1
+      needs-database: false
+    secrets: inherit
+
+  deploy-dev:
+    name: Deploy — DEV
+    needs: build
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout GitOps repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.GITOPS_REPO }}
+          token: ${{ secrets.GITOPS_TOKEN }}
+          path: _gitops
+
+      - name: Update image tag — DEV
+        env:
+          IMAGE_TAG: ${{ needs.build.outputs.image-tag }}
+        run: |
+          yq e ".image.tag = \"${IMAGE_TAG}\"" -i \
+            "_gitops/envs/dev/values-qc-service.yaml"
+          cd _gitops
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          git diff --staged --quiet && echo "Already up to date" && exit 0
+          git commit -m "ci(dev): update qc-service → ${IMAGE_TAG}"
+          git push
+
+  open-qa-pr:
+    name: Open PR — QA Promotion
+    needs: [build, deploy-dev]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout GitOps repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.GITOPS_REPO }}
+          token: ${{ secrets.GITOPS_TOKEN }}
+          path: _gitops
+
+      - name: Create branch, commit, open PR
+        env:
+          GH_TOKEN: ${{ secrets.GITOPS_TOKEN }}
+          IMAGE_TAG: ${{ needs.build.outputs.image-tag }}
+          REF_NAME: ${{ github.ref_name }}
+          ACTOR: ${{ github.actor }}
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          GITOPS_REPO_NAME: ${{ env.GITOPS_REPO }}
+        run: |
+          VALUES="_gitops/envs/qa/values-qc-service.yaml"
+          BRANCH="promote/qa/qc-service/${IMAGE_TAG}"
+
+          if [[ ! -f "$VALUES" ]]; then
+            echo "::warning::$VALUES not found — QA PR skipped."
+            exit 0
+          fi
+
+          cd _gitops
+          git checkout -b "$BRANCH"
+          yq e ".image.tag = \"${IMAGE_TAG}\"" -i "envs/qa/values-qc-service.yaml"
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          if git diff --staged --quiet; then
+            echo "QA already has this image — no PR needed"
+            exit 0
+          fi
+          git commit -m "promote(qa): qc-service → ${IMAGE_TAG}"
+          git push --force-with-lease origin "$BRANCH"
+
+          printf '%s\n' \
+            "## QA Promotion" \
+            "" \
+            "Service : qc-service" \
+            "Image   : ${IMAGE_TAG}" \
+            "Branch  : ${REF_NAME}" \
+            "Actor   : ${ACTOR}" \
+            "Build   : ${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}" \
+            "" \
+            "## Checklist" \
+            "- [ ] DEV smoke test passed (see build link above)" \
+            "- [ ] No unexpected config changes in this diff" \
+            "- [ ] QA team sign-off" \
+            "" \
+            "Merging this PR updates envs/qa/values-qc-service.yaml." \
+            "ArgoCD (pharma-qa) auto-syncs on merge." > /tmp/pr-body.md
+
+          PR_URL=$(gh pr view --repo "$GITOPS_REPO_NAME" --head "$BRANCH" --json url -q .url 2>/dev/null || true)
+          if [[ -n "$PR_URL" ]]; then
+            echo "::notice title=QA PR already open::${PR_URL}"
+          else
+            gh pr create \
+              --repo "$GITOPS_REPO_NAME" \
+              --title "promote(qa): qc-service → ${IMAGE_TAG}" \
+              --body-file /tmp/pr-body.md \
+              --base main \
+              --head "$BRANCH"
+          fi
+
+  dast:
+    name: DAST — ZAP Baseline (DEV)
+    if: false
+    needs: deploy-dev
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for DEV service to be healthy
+        run: |
+          URL="${{ vars.DEV_QC_SERVICE_URL }}/actuator/health"
+          for i in $(seq 1 20); do
+            curl -sf "$URL" && echo "Healthy" && exit 0
+            echo "Attempt $i/20 — retrying in 15s..."
+            sleep 15
+          done
+          echo "::error::DEV endpoint not healthy after 5 minutes"
+          exit 1
+
+      - name: OWASP ZAP — Baseline scan
+        uses: zaproxy/action-baseline@v0.12.0
+        with:
+          target: ${{ vars.DEV_QC_SERVICE_URL }}
+          fail_action: warn
+          artifact_name: zap-report-qc-service

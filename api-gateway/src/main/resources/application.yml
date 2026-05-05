@@ -58,6 +58,13 @@ spring:
             - AuthFilter
             - RewritePath=/api/qc, /api/qc/inspections
 
+        - id: qc-service
+          uri: "${QC_SERVICE_URL:http://qc-service:8086}"
+          predicates:
+            - Path=/api/qc/**
+          filters:
+            - AuthFilter
+
       globalcors:
         corsConfigurations:
           '[/**]':
