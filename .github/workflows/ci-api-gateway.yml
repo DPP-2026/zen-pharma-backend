@@ -100,7 +100,7 @@ jobs:
           GITOPS_REPO_NAME: ${{ env.GITOPS_REPO }}
         run: |
           VALUES="_gitops/envs/qa/values-api-gateway.yaml"
-          BRANCH="promote/qa/api-gateway/${IMAGE_TAG}"
+          BRANCH="promote/qa/api-gateway/latest"
 
           if [[ ! -f "$VALUES" ]]; then
             echo "::warning::$VALUES not found in zen-gitops — QA PR skipped."
@@ -108,7 +108,12 @@ jobs:
           fi
 
           cd _gitops
-          git checkout -b "$BRANCH"
+          if git ls-remote --exit-code origin "$BRANCH" &>/dev/null; then
+            git fetch origin "$BRANCH"
+            git checkout -b "$BRANCH" "origin/$BRANCH"
+          else
+            git checkout -b "$BRANCH"
+          fi
           yq e ".image.tag = \"${IMAGE_TAG}\"" -i "envs/qa/values-api-gateway.yaml"
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -118,7 +123,7 @@ jobs:
             exit 0
           fi
           git commit -m "promote(qa): api-gateway → ${IMAGE_TAG}"
-          git push origin "$BRANCH"
+          git push --force-with-lease origin "$BRANCH"
 
           printf '%s\n' \
             "## QA Promotion" \
@@ -137,14 +142,22 @@ jobs:
             "Merging this PR updates envs/qa/values-api-gateway.yaml." \
             "ArgoCD (pharma-qa) auto-syncs on merge." > /tmp/pr-body.md
 
-          gh pr create \
-            --repo "$GITOPS_REPO_NAME" \
-            --title "promote(qa): api-gateway → ${IMAGE_TAG}" \
-            --body-file /tmp/pr-body.md \
-            --base main \
-            --head "$BRANCH"
-
-          echo "::notice title=QA PR opened::Review and merge in ${GITOPS_REPO_NAME} to deploy to QA."
+          EXISTING_PR=$(gh pr view --repo "$GITOPS_REPO_NAME" --head "$BRANCH" --json number -q .number 2>/dev/null || true)
+          if [[ -n "$EXISTING_PR" ]]; then
+            gh pr edit "$EXISTING_PR" \
+              --repo "$GITOPS_REPO_NAME" \
+              --title "promote(qa): api-gateway → ${IMAGE_TAG}" \
+              --body-file /tmp/pr-body.md
+            echo "::notice title=QA PR updated::PR #${EXISTING_PR} updated to ${IMAGE_TAG}."
+          else
+            gh pr create \
+              --repo "$GITOPS_REPO_NAME" \
+              --title "promote(qa): api-gateway → ${IMAGE_TAG}" \
+              --body-file /tmp/pr-body.md \
+              --base main \
+              --head "$BRANCH"
+            echo "::notice title=QA PR opened::Review and merge in ${GITOPS_REPO_NAME} to deploy to QA."
+          fi
 
   # ── 4. DAST — ZAP baseline scan against DEV ─────────────────────────────────
   # Disabled. Enable by removing `if: false` once DEV_API_GATEWAY_URL is set in

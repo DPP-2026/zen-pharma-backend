@@ -90,7 +90,7 @@ jobs:
           GITOPS_REPO_NAME: ${{ env.GITOPS_REPO }}
         run: |
           VALUES="_gitops/envs/qa/values-auth-service.yaml"
-          BRANCH="promote/qa/auth-service/${IMAGE_TAG}"
+          BRANCH="promote/qa/auth-service/latest"
 
           if [[ ! -f "$VALUES" ]]; then
             echo "::warning::$VALUES not found — QA PR skipped."
@@ -98,7 +98,12 @@ jobs:
           fi
 
           cd _gitops
-          git checkout -b "$BRANCH"
+          if git ls-remote --exit-code origin "$BRANCH" &>/dev/null; then
+            git fetch origin "$BRANCH"
+            git checkout -b "$BRANCH" "origin/$BRANCH"
+          else
+            git checkout -b "$BRANCH"
+          fi
           yq e ".image.tag = \"${IMAGE_TAG}\"" -i "envs/qa/values-auth-service.yaml"
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -127,9 +132,13 @@ jobs:
             "Merging this PR updates envs/qa/values-auth-service.yaml." \
             "ArgoCD (pharma-qa) auto-syncs on merge." > /tmp/pr-body.md
 
-          PR_URL=$(gh pr view --repo "$GITOPS_REPO_NAME" --head "$BRANCH" --json url -q .url 2>/dev/null || true)
-          if [[ -n "$PR_URL" ]]; then
-            echo "::notice title=QA PR already open::${PR_URL}"
+          EXISTING_PR=$(gh pr view --repo "$GITOPS_REPO_NAME" --head "$BRANCH" --json number -q .number 2>/dev/null || true)
+          if [[ -n "$EXISTING_PR" ]]; then
+            gh pr edit "$EXISTING_PR" \
+              --repo "$GITOPS_REPO_NAME" \
+              --title "promote(qa): auth-service → ${IMAGE_TAG}" \
+              --body-file /tmp/pr-body.md
+            echo "::notice title=QA PR updated::PR #${EXISTING_PR} updated to ${IMAGE_TAG}."
           else
             gh pr create \
               --repo "$GITOPS_REPO_NAME" \
