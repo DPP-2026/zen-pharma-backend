@@ -136,20 +136,22 @@ jobs:
             "Merging this PR updates envs/qa/values-${SVC}.yaml." \
             "ArgoCD (pharma-qa) auto-syncs on merge." > /tmp/pr-body.md
 
+          PR_TITLE="promote(qa): ${SVC} → ${IMAGE_TAG}"
+          PR_BODY=$(cat /tmp/pr-body.md)
           EXISTING_PR=$(gh api "repos/${GITOPS_REPO_NAME}/pulls?head=${GITOPS_REPO_NAME%%/*}:${BRANCH}&state=open&per_page=1" --jq '.[0].number // empty' 2>/dev/null || true)
           if [[ -n "$EXISTING_PR" ]]; then
-            gh pr edit "$EXISTING_PR" \
-              --repo "$GITOPS_REPO_NAME" \
-              --title "promote(qa): ${SVC} → ${IMAGE_TAG}" \
-              --body-file /tmp/pr-body.md
+            gh api "repos/${GITOPS_REPO_NAME}/pulls/${EXISTING_PR}" \
+              --method PATCH \
+              --field title="${PR_TITLE}" \
+              --field body="${PR_BODY}"
             echo "::notice title=QA PR updated::PR #${EXISTING_PR} updated to ${IMAGE_TAG}."
           else
-            gh pr create \
-              --repo "$GITOPS_REPO_NAME" \
-              --title "promote(qa): ${SVC} → ${IMAGE_TAG}" \
-              --body-file /tmp/pr-body.md \
-              --base main \
-              --head "$BRANCH"
+            gh api "repos/${GITOPS_REPO_NAME}/pulls" \
+              --method POST \
+              --field title="${PR_TITLE}" \
+              --field body="${PR_BODY}" \
+              --field base=main \
+              --field head="$BRANCH"
             echo "::notice title=QA PR opened::Review and merge in ${GITOPS_REPO_NAME} to deploy to QA."
           fi
 
