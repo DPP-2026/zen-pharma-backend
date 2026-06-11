@@ -1,331 +1,261 @@
-# Fork setup — zen-pharma-backend CI/CD, ECR, GitOps, EKS, ArgoCD
+# End-to-End Project Setup Guide
 
-This guide is for teams who **fork** (or copy) `zen-pharma-backend` and want GitHub Actions, AWS ECR, and GitOps-driven deploys to **their** AWS account and **their** repos. It aligns with [`CI-ARCHITECTURE.md`](./CI-ARCHITECTURE.md) in this repository and assumes infrastructure is provisioned using your **`zen-infra`** (or equivalent) Terraform/modules.
+Follow these steps **in order**. Each step depends on the previous one being complete.
 
-## Repositories involved
+**Repositories involved**
 
 | Repository | Role |
 |------------|------|
-| `zen-pharma-backend` (fork) | Application source + GitHub Actions CI |
-| `zen-gitops` (fork or new repo) | Helm values + ArgoCD Application manifests; CI writes here |
-| `zen-infra` | EKS, VPC, RDS, ECR, IAM OIDC role, ArgoCD install, etc. (follow that repo’s README) |
+| `zen-infra` | Terraform — provisions EKS, ECR, IAM, ArgoCD |
+| `zen-pharma-backend` | Backend microservices + CI pipelines |
+| `zen-pharma-frontend` | React frontend + CI pipeline |
+| `zen-gitops` | Helm values — ArgoCD reads from here |
 
-**Placeholders to replace**
+**Placeholders** — replace these throughout:
 
-- `YOUR_GITHUB_USERNAME` — your GitHub username (or org name if you're using one)
-- `YOUR_AWS_ACCOUNT_ID` — 12-digit AWS account ID  
-- `YOUR_REGION` — e.g. `us-east-1` (workflows default to `us-east-1`)
-
----
-
-## Phase 0 — Decisions and forks
-
-1. Fork **`zen-pharma-backend`** to `YOUR_GITHUB_USERNAME/zen-pharma-backend`.
-2. Create a GitOps repo you control:
-   - Fork upstream **`zen-gitops`** if available, **or** create `YOUR_GITHUB_USERNAME/zen-gitops` and copy the expected layout from [`CI-ARCHITECTURE.md`](./CI-ARCHITECTURE.md) (see Phase 5).
-3. Clone **`zen-infra`** locally and read its README: note variables for cluster name, ECR, GitHub OIDC, ArgoCD, and any IRSA roles.
+- `YOUR_GITHUB_USERNAME` — your GitHub username or org
+- `YOUR_AWS_ACCOUNT_ID` — 12-digit AWS account ID
+- `YOUR_REGION` — e.g. `us-east-1`
 
 ---
 
-## Phase 1 — Align workflow configuration with your GitHub slugs
+## Step 1 — Provision infrastructure via zen-infra
 
-Upstream workflows set `GITOPS_REPO` to **`YOUR_GITHUB_USERNAME/zen-gitops`**. After a fork, update **every** `ci-*.yml` and `promote-prod.yml` under `.github/workflows/` so that:
+> This creates EKS, ECR repositories, IAM OIDC role, and networking.
 
-```yaml
-env:
-  GITOPS_REPO: YOUR_GITHUB_USERNAME/zen-gitops
-```
+1. Fork or clone `zen-infra` to your GitHub account.
+2. Set the required secrets in **`zen-infra` → Settings → Secrets and variables → Actions → Secrets**:
 
-Also update any hard-coded notices in shell steps that still reference `YOUR_GITHUB_USERNAME/zen-gitops` (search the workflows directory).
+   | Secret | Value |
+   |--------|-------|
+   | `AWS_ACCESS_KEY_ID` | Your IAM user access key |
+   | `AWS_SECRET_ACCESS_KEY` | Your IAM user secret key |
 
-**Optional:** define a repository **variable** `GITOPS_REPO` in **Settings → Secrets and variables → Actions → Variables** and reference it from workflows to avoid scattering org names (requires small workflow edits).
+3. Go to **Actions → Terraform Infrastructure → Run workflow**.
+4. Select:
+   - **Environment:** `dev`
+   - **Action:** `apply`
+5. Click **Run workflow** and wait for it to complete (≈ 15–20 min).
+6. From the workflow logs, note:
+   - EKS cluster name
+   - AWS Account ID
+   - ECR registry URL (`YOUR_AWS_ACCOUNT_ID.dkr.ecr.YOUR_REGION.amazonaws.com`)
 
-### IAM OIDC trust (AWS)
-
-The trust policy `sub` condition must be:
-
-```
-repo:YOUR_GITHUB_USERNAME/zen-pharma-backend:*
-```
-
-> **Common mistake:** the `sub` value must include your GitHub username/org followed by a `/` before the repo name — e.g. `repo:johndoe/zen-pharma-backend:*`. A missing username (e.g. `repo:/zen-pharma-backend:*`) will cause every `sts:AssumeRoleWithWebIdentity` call to be denied, and the ECR push step will fail with `AccessDenied`.
-
-Update the `Federated` ARN and `sub` condition in your trust policy to use your username and account ID (see [OIDC and IAM role — AWS CLI](#oidc-and-iam-role--aws-cli-pharma-dev-github-actions-role) below).
-
-If you use a different IAM role name than `pharma-dev-github-actions-role`, update **both** zen-infra (or your IaC) and the reusable workflows [`_java-build.yml`](./.github/workflows/_java-build.yml) / [`_node-build.yml`](./.github/workflows/_node-build.yml) (`role-to-assume`).
+> **Verify:** Go to AWS Console → EKS — your cluster should be `Active`. Go to ECR — you should see one repository per microservice (`api-gateway`, `auth-service`, `drug-catalog-service`, `inventory-service`, `manufacturing-service`, `notification-service`, `qc-service`, `supplier-service`, `pharma-ui`).
 
 ---
 
-## OIDC and IAM role — AWS CLI (`pharma-dev-github-actions-role`)
+## Step 1b — Personalise zen-gitops for your AWS account
 
-Use this sequence when provisioning the GitHub Actions → AWS trust by hand (same shape as [`CI-ARCHITECTURE.md`](./CI-ARCHITECTURE.md)). **Role name:** `pharma-dev-github-actions-role`.
+> Do this **before** running the bootstrap scripts. ArgoCD will start syncing `zen-gitops` immediately after Step 2, so image URLs and DB endpoints must point to your account first.
 
-**Forks:** Replace `YOUR_AWS_ACCOUNT_ID` with your account ID everywhere below, and change `token.actions.githubusercontent.com:sub` to `repo:YOUR_GITHUB_USERNAME/zen-pharma-backend:*` (and update the `Federated` ARN so the account ID in `arn:aws:iam::<ACCOUNT_ID>:oidc-provider/...` matches).
+The `envs/dev/*.yaml` files are pre-populated with the instructor's AWS account ID and RDS instance identifier. Leave them as-is and ArgoCD will produce `ImagePullBackOff` errors because it tries to pull images from an ECR registry you don't own.
 
-### Step 1 — Create the GitHub OIDC identity provider (once per account)
+### 1. Replace the AWS account ID
 
-This registers the GitHub Actions issuer so IAM can trust its tokens. If you see `EntityAlreadyExists`, the provider is already present—skip to Step 2.
+Every `image.repository` and the IAM role ARN in `values-api-gateway.yaml` contain the placeholder account ID. Replace it with yours (from Step 1 logs or):
 
 ```bash
-aws iam create-open-id-connect-provider \
-  --url https://token.actions.githubusercontent.com \
-  --client-id-list sts.amazonaws.com \
-  --thumbprint-list 6938fd4d98bab03faadb97b34396831e3780aea1
+aws sts get-caller-identity --query Account --output text
 ```
 
-To confirm:
+Run from the root of your forked `zen-gitops` repo:
 
 ```bash
-aws iam list-open-id-connect-providers
+# macOS/BSD sed (note the '' after -i)
+find envs/ -name "*.yaml" -exec sed -i '' 's/516209541629/YOUR_AWS_ACCOUNT_ID/g' {} +
+
+# Linux sed
+find envs/ -name "*.yaml" -exec sed -i 's/516209541629/YOUR_AWS_ACCOUNT_ID/g' {} +
 ```
 
-### Step 2 — Trust policy (exact)
+### 2. Replace the RDS instance identifier
 
-Save as `trust-policy.json` (values below match production for account `YOUR_AWS_ACCOUNT_ID` and repo `YOUR_GITHUB_USERNAME/zen-pharma-backend`):
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": {
-        "Federated": "arn:aws:iam::YOUR_AWS_ACCOUNT_ID:oidc-provider/token.actions.githubusercontent.com"
-      },
-      "Action": "sts:AssumeRoleWithWebIdentity",
-      "Condition": {
-        "StringEquals": {
-          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
-        },
-        "StringLike": {
-          "token.actions.githubusercontent.com:sub": "repo:YOUR_GITHUB_USERNAME/zen-pharma-backend:*"
-        }
-      }
-    }
-  ]
-}
-```
-
-### Step 3 — Create the IAM role
+Every `DB_HOST` env var contains the instructor's RDS instance identifier. Find yours in **AWS Console → RDS → Databases → your instance → Endpoint** — it is the subdomain prefix before `.us-east-1.rds.amazonaws.com`.
 
 ```bash
-aws iam create-role \
-  --role-name pharma-dev-github-actions-role \
-  --assume-role-policy-document file://trust-policy.json \
-  --description "GitHub Actions OIDC role for zen-pharma-backend CI/CD (ECR push)"
+# macOS/BSD sed
+find envs/ -name "*.yaml" -exec sed -i '' 's/cyrywaguk6v4/YOUR_RDS_ID/g' {} +
+
+# Linux sed
+find envs/ -name "*.yaml" -exec sed -i 's/cyrywaguk6v4/YOUR_RDS_ID/g' {} +
 ```
 
-### Step 4 — Permission policy (exact — ECR only)
-
-Save as `pharma-ecr-policy.json`:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "ECRAuth",
-      "Effect": "Allow",
-      "Action": "ecr:GetAuthorizationToken",
-      "Resource": "*"
-    },
-    {
-      "Sid": "ECRPushPull",
-      "Effect": "Allow",
-      "Action": [
-        "ecr:BatchCheckLayerAvailability",
-        "ecr:BatchGetImage",
-        "ecr:CompleteLayerUpload",
-        "ecr:DescribeImages",
-        "ecr:DescribeRepositories",
-        "ecr:GetDownloadUrlForLayer",
-        "ecr:InitiateLayerUpload",
-        "ecr:ListImages",
-        "ecr:PutImage",
-        "ecr:UploadLayerPart"
-      ],
-      "Resource": "arn:aws:ecr:us-east-1:YOUR_AWS_ACCOUNT_ID:repository/*"
-    }
-  ]
-}
-```
-
-### Step 5 — Attach the inline policy to the role
+### 3. Verify and push
 
 ```bash
-aws iam put-role-policy \
-  --role-name pharma-dev-github-actions-role \
-  --policy-name pharma-ecr-access \
-  --policy-document file://pharma-ecr-policy.json
+# Should return no output (no instructor values left)
+grep -r "516209541629\|cyrywaguk6v4" envs/
+
+git add envs/
+git commit -m "chore(envs/dev): replace instructor account ID and RDS endpoint"
+git push
 ```
 
-### Step 6 — Verify
-
-```bash
-aws iam get-role --role-name pharma-dev-github-actions-role --query 'Role.Arn' --output text
-
-aws iam get-role-policy \
-  --role-name pharma-dev-github-actions-role \
-  --policy-name pharma-ecr-access
-```
-
-GitHub Actions assumes:
-
-`arn:aws:iam::<AWS_ACCOUNT_ID>:role/pharma-dev-github-actions-role`
-
-Set repository secret **`AWS_ACCOUNT_ID`** to `YOUR_AWS_ACCOUNT_ID` (or your account ID) so [`_java-build.yml`](./.github/workflows/_java-build.yml) / [`_node-build.yml`](./.github/workflows/_node-build.yml) can construct that ARN.
+Once pushed, CI will overwrite image tags with your ECR images on every build and ArgoCD syncs will succeed.
 
 ---
 
-## Phase 2 — AWS via zen-infra (EKS, networking, ECR, IAM)
+## Step 2 — Run the bootstrap scripts (zen-infra/scripts/)
 
-Complete these using **zen-infra** where possible; use the AWS CLI only for steps not covered by modules.
+Run these four scripts **in order** from your local machine after the Terraform apply completes. Each script prompts for required values — nothing is hardcoded.
 
-1. **VPC / EKS** — Apply zen-infra modules so you have a working cluster and node groups (or Fargate), per zen-infra docs.
-2. **ECR repositories** — One repository per microservice (names must match workflows):
+```bash
+# First, update your kubeconfig to point at the new cluster
+aws eks update-kubeconfig --name <cluster-name> --region YOUR_REGION
+```
 
-   - `api-gateway`
-   - `auth-service`
-   - `drug-catalog-service`
-   - `inventory-service`
-   - `manufacturing-service`
-   - `notification-service`
-   - `qc-service`
-   - `supplier-service`
+### Script 01 — Install Kubernetes prerequisites
+```bash
+bash scripts/01-install-prerequisites.sh
+```
+Installs: NGINX Ingress Controller, ArgoCD, External Secrets Operator, metrics-server.
 
-   Enable **scan on push** if your policy requires it (recommended in `CI-ARCHITECTURE.md`).
+### Script 02 — Bootstrap ArgoCD
+```bash
+bash scripts/02-bootstrap-argocd.sh
+```
+Registers `zen-gitops` in ArgoCD, creates the `pharma` AppProject, deploys all ArgoCD Application manifests.
 
-3. **GitHub OIDC + CI IAM role** — Use the [OIDC and IAM role — AWS CLI](#oidc-and-iam-role--aws-cli-pharma-dev-github-actions-role) section above, or equivalent resources in zen-infra (same trust and ECR-only permissions).
+### Script 03 — Configure External Secrets
+```bash
+bash scripts/03-setup-external-secrets.sh
+```
+Creates `ClusterSecretStore` and `ExternalSecrets` so pods pull DB credentials and JWT secret from AWS Secrets Manager via IRSA.
 
-4. **Cosign / admission** — If production enforces signed images, zen-infra should install **Kyverno** (or equivalent) policies that verify Cosign signatures, consistent with how [`_java-build.yml`](./.github/workflows/_java-build.yml) signs images after push.
-
----
-
-## Phase 3 — ArgoCD on EKS
-
-1. **Install ArgoCD** — Via zen-infra Helm/module or the official Helm chart; secure the server (ingress, SSO, TLS) per your organization.
-2. **Register the GitOps repo** — Add **read** credentials (SSH deploy key or HTTPS token) so ArgoCD can pull `YOUR_GITHUB_USERNAME/zen-gitops`. CI uses a separate **write** token (`GITOPS_TOKEN`).
-3. **Bootstrap Applications** — Apply manifests under `argocd/apps/` in your gitops repo. Typical pattern for this project:
-
-   - **DEV:** one ArgoCD Application per service, **auto-sync**
-   - **QA:** one app watching `envs/qa/`, **auto-sync**
-   - **PROD:** one app watching `envs/prod/`, **manual sync**
-
-4. **Image pull** — Nodes or workloads need permission to pull from ECR; zen-infra usually wires IRSA or node instance profiles.
+### Script 04 — Verify deployment
+```bash
+bash scripts/04-verify-deployment.sh
+```
+Health-checks pods, ArgoCD apps, External Secrets, services/ingress, and HTTP endpoints. **All checks must pass before proceeding.**
 
 ---
 
-## Phase 4 — GitHub configuration (forked `zen-pharma-backend`)
+## Step 3 — Configure GitHub repository secrets and variables
 
-### 4.1 Repository secrets
+Do this for **both** `zen-pharma-backend` and `zen-pharma-frontend`.
+
+### zen-pharma-backend
 
 **Settings → Secrets and variables → Actions → Secrets**
 
-| Secret | Required | Purpose |
-|--------|----------|---------|
-| `AWS_ACCOUNT_ID` | Yes | Used in `role-to-assume` ARN and ECR URL construction |
-| `GITOPS_TOKEN` | Yes | PAT or GitHub App token with **`contents: write`** (and ability to open PRs) on **`YOUR_GITHUB_USERNAME/zen-gitops`** |
+| Secret | Required | Value |
+|--------|----------|-------|
+| `AWS_ACCOUNT_ID` | Yes | Your 12-digit AWS account ID |
+| `GITOPS_TOKEN` | Yes | GitHub PAT with `contents: write` + PR permissions on `YOUR_GITHUB_USERNAME/zen-gitops` |
+| `NVD_API_KEY` | Optional | NIST NVD API key — see [how to get it](#how-to-get-nvd_api_key) below |
 
-The workflows check out zen-gitops, commit, push, and use `gh pr create`. Ensure the token can push branches and open pull requests in the gitops repository.
+**Settings → Secrets and variables → Actions → Variables**
 
-### 4.2 Environments
+| Variable | Value |
+|----------|-------|
+| `GITOPS_REPO` | `YOUR_GITHUB_USERNAME/zen-gitops` |
 
-**Settings → Environments**
+**Settings → Environments** — create two environments:
 
-| Environment | Protection |
-|-------------|------------|
-| `dev` | None (deploy job runs without approval) |
-| `prod` | **Required reviewers** for [`promote-prod.yml`](./.github/workflows/promote-prod.yml) |
+| Environment | Protection rule |
+|-------------|----------------|
+| `dev` | None |
+| `prod` | Required reviewers |
 
-### 4.3 Actions and forks
+### zen-pharma-frontend
 
-Ensure **Actions** are enabled on the fork. For **forked repositories**, GitHub may restrict workflows that use secrets on `pull_request` from external contributors; align with your org’s security policy.
+**Settings → Secrets and variables → Actions → Secrets**
 
-### 4.4 Branch strategy
+| Secret | Value |
+|--------|-------|
+| `AWS_ACCOUNT_ID` | Your 12-digit AWS account ID |
+| `GITOPS_TOKEN` | Same PAT as above |
 
-CI is wired for:
+**Settings → Secrets and variables → Actions → Variables**
 
-- Feature branches: `feat-*`, `fix-*`, `chore-*` → lightweight `ci-pr-*.yml`
-- Full build + ECR + gitops: **`develop`** and **`release/**`**
-
-Ensure your integration branch is named **`develop`** or update `branches:` in each workflow.
+| Variable | Value |
+|----------|-------|
+| `GITOPS_REPO` | `YOUR_GITHUB_USERNAME/zen-gitops` |
 
 ---
 
-## Phase 5 — GitOps repo layout (`YOUR_GITHUB_USERNAME/zen-gitops`)
+### How to get `NVD_API_KEY`
 
-Mirror the structure described in [`CI-ARCHITECTURE.md`](./CI-ARCHITECTURE.md):
+Java CI runs OWASP Dependency Check, which pulls vulnerability data from the NIST National Vulnerability Database. Without an API key, NVD rate-limits requests and the step runs slowly. The key is optional — CI still works without it.
 
-```text
-zen-gitops/
-├── argocd/apps/
-│   ├── dev/          # one Application YAML per service (auto-sync)
-│   ├── qa/           # e.g. pharma-qa app (auto-sync)
-│   └── prod/         # e.g. pharma-prod app (manual sync)
-└── envs/
-    ├── dev/
-    ├── qa/
-    └── prod/
+1. Go to [https://nvd.nist.gov/developers/request-an-api-key](https://nvd.nist.gov/developers/request-an-api-key).
+2. Fill in the form (name, organisation, email, intended use).
+3. NIST sends a verification email — click the link inside it.
+4. After verifying, NIST emails your API key.
+5. In GitHub: **Settings → Secrets and variables → Actions → New repository secret**.
+   - **Name:** `NVD_API_KEY`
+   - **Value:** paste the key from NIST.
+6. Save. Workflows that call `_java-pr-check.yml` / `_java-build.yml` already use `secrets: inherit`, so no further changes are needed.
+
+---
+
+## Step 4 — Trigger a CI pipeline
+
+Push a commit to the `develop` branch of `zen-pharma-backend` (or `zen-pharma-frontend`) to trigger the full CI run.
+
+```bash
+git checkout develop
+git commit --allow-empty -m "chore: trigger CI"
+git push origin develop
 ```
 
-**Image values** must point at **your** ECR:
+Or go to **Actions → select any `ci-*.yml` workflow → Run workflow** on `develop`.
 
-```yaml
-image:
-  repository: YOUR_AWS_ACCOUNT_ID.dkr.ecr.YOUR_REGION.amazonaws.com/<service>
-  tag: <patched-by-ci>
-  pullPolicy: IfNotPresent
+**What the pipeline does:**
+1. Lint + test + build
+2. Build Docker image
+3. Push image to ECR with tag = commit SHA
+4. Update `envs/dev/values-<service>.yaml` in `zen-gitops` with the new image tag
+5. ArgoCD detects the change and rolls out automatically
+
+---
+
+## Step 5 — Validate images in ECR
+
+1. Go to **AWS Console → ECR → Repositories**.
+2. Open the repository for the service you triggered (e.g. `auth-service`).
+3. Confirm a new image tag matching the commit SHA appears.
+
+Or via CLI:
+
+```bash
+aws ecr describe-images \
+  --repository-name auth-service \
+  --region YOUR_REGION \
+  --query 'sort_by(imageDetails, &imagePushedAt)[-1]'
 ```
 
-**Drug catalog:** upstream uses `GITOPS_SERVICE_NAME: catalog-service` in [`ci-drug-catalog.yml`](./.github/workflows/ci-drug-catalog.yml) while ECR remains `drug-catalog-service`. Keep dev values filenames and Helm release names consistent with what that workflow patches.
+---
+
+## Step 6 — Validate ArgoCD sync
+
+1. Get the ArgoCD URL:
+   ```bash
+   kubectl get svc -n argocd argocd-server
+   ```
+2. Log in (default admin password):
+   ```bash
+   kubectl -n argocd get secret argocd-initial-admin-secret \
+     -o jsonpath="{.data.password}" | base64 -d
+   ```
+3. Open the ArgoCD UI → confirm the application for the deployed service shows:
+   - **Status:** `Synced`
+   - **Health:** `Healthy`
+4. Confirm the pod is running with the new image:
+   ```bash
+   kubectl get pods -n pharma-dev
+   kubectl describe pod <pod-name> -n pharma-dev | grep Image:
+   ```
+
+> If the app shows `OutOfSync`, click **Sync** manually or wait for the auto-sync interval (default 3 min).
 
 ---
 
-## Phase 6 — Verification checklist
-
-1. **AWS:** OIDC provider exists; IAM role trust matches `YOUR_GITHUB_USERNAME/zen-pharma-backend`; ECR repos exist; role can assume and push (optional smoke test).
-2. **GitHub:** Secrets and environments configured; `GITOPS_TOKEN` can clone, push, and open PRs on the gitops repo.
-3. **Workflows:** All `GITOPS_REPO` values point to `YOUR_GITHUB_USERNAME/zen-gitops`.
-4. **ArgoCD:** Applications sync from your gitops repo; DEV reaches Healthy after CI updates `envs/dev/values-<service>.yaml`.
-5. **End-to-end:** Push a change to **`develop`** under one service path (e.g. `api-gateway/`) → build → ECR tag `sha-xxxxxxx` → dev values updated → ArgoCD rolls out.
-
----
-
-## Phase 7 — Operations reminders
-
-- **QA / PROD promotion** requires corresponding **`envs/qa/`** and **`envs/prod/`** values files; otherwise CI logs a warning and skips opening the promotion PR (see FAQ in [`CI-ARCHITECTURE.md`](./CI-ARCHITECTURE.md)).
-- **PROD** uses manual ArgoCD sync after the PROD PR merges (`syncPolicy: Manual` for the prod app).
-- **Semgrep, CodeQL, Trivy** on private forks may require GitHub Advanced Security or appropriate permissions.
-
----
-
-## References in this repository
+## Reference
 
 | Resource | Description |
 |----------|-------------|
-| [`CI-ARCHITECTURE.md`](./CI-ARCHITECTURE.md) | Full CI/CD architecture, OIDC steps, ECR policy JSON, gitops layout |
-| [`.github/workflows/_java-build.yml`](./.github/workflows/_java-build.yml) | Java build, ECR, Cosign, OIDC role |
-| [`.github/workflows/_node-build.yml`](./.github/workflows/_node-build.yml) | Node build path |
-| [`.github/workflows/ci-*.yml`](./.github/workflows/) | Per-service full pipeline + gitops jobs |
-| [`.github/workflows/promote-prod.yml`](./.github/workflows/promote-prod.yml) | Manual PROD promotion |
-
-Details not covered here (cluster sizing, RDS, ArgoCD SSO, exact Terraform variables) should be taken from **`zen-infra`** and reconciled with role names, region, and cluster identifiers used in these workflows.
-
----
-
-## Optional — NIST NVD API key (`NVD_API_KEY`)
-
-Java CI runs **OWASP Dependency Check**, which downloads vulnerability metadata from the **NIST National Vulnerability Database (NVD)**. Without an API key, NVD applies strict rate limits and the step can be slow; with a key, requests are faster and more reliable.
-
-This is **optional**: workflows still run OWASP if the secret is missing; adding the key only improves speed and rate limits.
-
-**Steps (once per repository)**
-
-1. Request a key from NIST: open [NVD — Request an API Key](https://nvd.nist.gov/developers/request-an-api-key) and submit the form. Use a mailbox you can access; NIST emails a verification link.
-2. After verifying, copy the API key from NIST’s confirmation.
-3. In GitHub: **Settings → Secrets and variables → Actions → New repository secret**.
-4. **Name:** `NVD_API_KEY` (exact name — workflows pass it to the Maven plugin via the environment).
-5. **Value:** paste the key and save.
-6. Ensure workflows that call `_java-pr-check.yml` / `_java-build.yml` use **`secrets: inherit`** (upstream already does) so the secret is available.
-
-More detail: [NVD API key (OWASP Dependency Check)](./CI-ARCHITECTURE.md#nvd-api-key-owasp-dependency-check) in `CI-ARCHITECTURE.md`.
+| [`CI-ARCHITECTURE.md`](./CI-ARCHITECTURE.md) | Full CI/CD architecture, OIDC, ECR policy, gitops layout |
+| [`POST-DEPLOYMENT-WORKFLOW.md`](./POST-DEPLOYMENT-WORKFLOW.md) | QA and PROD promotion steps |
+| [`.github/workflows/promote-prod.yml`](./.github/workflows/promote-prod.yml) | Manual PROD promotion workflow |
