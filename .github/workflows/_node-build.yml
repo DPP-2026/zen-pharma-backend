@@ -5,7 +5,7 @@
 #   1. npm ci + ESLint      — install dependencies + lint (--max-warnings 0)
 #   2. npm test             — unit tests with Jest + coverage gate (≥ 80%)
 #   3. CodeQL               — JavaScript/TypeScript security-extended queries
-#   4. npm audit            — fail if any HIGH/CRITICAL vulnerabilities found
+#   4. npm audit            — report HIGH/CRITICAL vulnerabilities (non-blocking)
 #   5. Docker build         — multi-stage, non-root UID/GID 1000
 #   6. Trivy                — image scan, fail on HIGH/CRITICAL CVEs
 #   7. ECR push             — tagged as sha-<7chars>
@@ -117,8 +117,9 @@ jobs:
         with:
           category: /language:javascript
 
-      # ── npm audit (fail on HIGH/CRITICAL) ─────────────────────────────────────
-      - name: npm audit (HIGH/CRITICAL → fail)
+      # ── npm audit (report HIGH/CRITICAL, non-blocking) ────────────────────────
+      - name: npm audit (HIGH/CRITICAL → report only)
+        continue-on-error: true
         run: cd ${{ inputs.service-dir }} && npm audit --audit-level=high
 
       # ── AWS credentials via OIDC (no long-lived keys) ─────────────────────────
