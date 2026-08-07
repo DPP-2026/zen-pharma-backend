@@ -11,6 +11,8 @@ on:
       - 'auth-service/**'
       - '.github/workflows/ci-auth-service.yml'
 
+  workflow_dispatch: {}
+
 permissions:
   id-token: write
   contents: read

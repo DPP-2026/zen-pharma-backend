@@ -11,6 +11,8 @@ on:
       - 'notification-service/**'
       - '.github/workflows/ci-notification.yml'
 
+  workflow_dispatch: {}
+
 permissions:
   id-token: write
   contents: read

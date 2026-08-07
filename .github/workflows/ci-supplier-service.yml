@@ -11,6 +11,8 @@ on:
       - 'supplier-service/**'
       - '.github/workflows/ci-supplier-service.yml'
 
+  workflow_dispatch: {}
+
 permissions:
   id-token: write
   contents: read
