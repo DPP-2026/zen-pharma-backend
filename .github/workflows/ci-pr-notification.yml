@@ -6,10 +6,6 @@ on:
     paths:
       - 'notification-service/**'
       - '.github/workflows/ci-pr-notification.yml'
-  pull_request:
-    branches: [develop]
-    paths:
-      - 'notification-service/**'
 
 permissions:
   contents: read

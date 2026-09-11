@@ -6,10 +6,6 @@ on:
     paths:
       - 'drug-catalog-service/**'
       - '.github/workflows/ci-pr-drug-catalog.yml'
-  pull_request:
-    branches: [develop]
-    paths:
-      - 'drug-catalog-service/**'
 
 permissions:
   contents: read

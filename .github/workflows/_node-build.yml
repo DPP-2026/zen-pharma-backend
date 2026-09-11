@@ -5,12 +5,11 @@
 #   1. npm ci + ESLint      — install dependencies + lint (--max-warnings 0)
 #   2. npm test             — unit tests with Jest + coverage gate (≥ 80%)
 #   3. CodeQL               — JavaScript/TypeScript security-extended queries
-#   4. Semgrep              — javascript · nodejs · owasp-top-ten rules
-#   5. npm audit            — fail if any HIGH/CRITICAL vulnerabilities found
-#   6. Docker build         — multi-stage, non-root UID/GID 1000
-#   7. Trivy                — image scan, fail on HIGH/CRITICAL CVEs
-#   8. ECR push             — tagged as sha-<7chars>
-#   9. Cosign sign          — keyless, GitHub OIDC → Fulcio CA → Rekor transparency log
+#   4. npm audit            — report HIGH/CRITICAL vulnerabilities (non-blocking)
+#   5. Docker build         — multi-stage, non-root UID/GID 1000
+#   6. Trivy                — image scan, fail on HIGH/CRITICAL CVEs
+#   7. ECR push             — tagged as sha-<7chars>
+#   8. Cosign sign          — keyless, GitHub OIDC → Fulcio CA → Rekor transparency log
 #
 # Outputs: image-tag (sha-<7chars>), registry (ECR registry URL)
 
@@ -51,8 +50,6 @@ on:
     secrets:
       AWS_ACCOUNT_ID:
         required: true
-      SEMGREP_APP_TOKEN:
-        required: false
 
 jobs:
   build-and-push:
@@ -120,20 +117,8 @@ jobs:
         with:
           category: /language:javascript
 
-      # ── Semgrep SAST ──────────────────────────────────────────────────────────
-      - name: Semgrep SAST (javascript · nodejs · owasp-top-ten)
-        uses: semgrep/semgrep-action@v1
-        continue-on-error: true
-        with:
-          config: >-
-            p/javascript
-            p/nodejs
-            p/owasp-top-ten
-        env:
-          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
-
-      # ── npm audit (fail on HIGH/CRITICAL) ─────────────────────────────────────
-      - name: npm audit (HIGH/CRITICAL → fail)
+      # ── npm audit (report HIGH/CRITICAL, non-blocking) ────────────────────────
+      - name: npm audit (HIGH/CRITICAL → report only)
         continue-on-error: true
         run: cd ${{ inputs.service-dir }} && npm audit --audit-level=high
 

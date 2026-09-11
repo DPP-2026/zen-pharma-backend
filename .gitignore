@@ -42,3 +42,10 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# Local presentation drafts (not project artifacts)
+*.pptx
+~$*.pptx
+
+# Local planning artifacts (specs/plans generated during agent-assisted work)
+docs/superpowers/

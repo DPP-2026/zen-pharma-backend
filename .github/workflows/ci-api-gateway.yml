@@ -33,7 +33,7 @@ env:
 
 jobs:
 
-  # ── 1. Build: Maven · CodeQL · Semgrep · OWASP Dep · Trivy · ECR · Cosign ──
+  # ── 1. Build: Maven · CodeQL · OWASP Dep · Trivy · ECR · Cosign ──
   build:
     name: Build & Security Gates
     uses: ./.github/workflows/_java-build.yml

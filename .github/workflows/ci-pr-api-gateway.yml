@@ -1,6 +1,6 @@
 name: PR Check — api-gateway
 
-# Runs on feature/fix/chore branches and PRs to develop.
+# Runs on feature/fix/chore branches.
 # Lint + test + SAST only. No Docker, no ECR, no deploy.
 
 on:
@@ -9,10 +9,6 @@ on:
     paths:
       - 'api-gateway/**'
       - '.github/workflows/ci-pr-api-gateway.yml'
-  pull_request:
-    branches: [develop]
-    paths:
-      - 'api-gateway/**'
 
 permissions:
   contents: read

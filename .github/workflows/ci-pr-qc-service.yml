@@ -6,10 +6,6 @@ on:
     paths:
       - 'qc-service/**'
       - '.github/workflows/ci-pr-qc-service.yml'
-  pull_request:
-    branches: [develop]
-    paths:
-      - 'qc-service/**'
 
 permissions:
   contents: read

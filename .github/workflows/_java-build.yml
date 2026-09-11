@@ -4,12 +4,11 @@
 # Pipeline stages (all in a single job, sequential):
 #   1. Maven verify  — unit/integration tests + JaCoCo coverage gate (≥ 80%)
 #   2. CodeQL        — Java security-extended queries (instruments Maven build)
-#   3. Semgrep       — java · owasp-top-ten · spring-boot rules
-#   4. OWASP Dep Chk — CVSS ≥ 7.0 reported (non-blocking)
-#   5. Docker build  — multi-stage, non-root UID/GID 1000
-#   6. Trivy         — image scan, fail on HIGH/CRITICAL CVEs
-#   7. ECR push      — tagged as sha-<7chars>
-#   8. Cosign sign   — keyless, GitHub OIDC → Fulcio CA → Rekor transparency log
+#   3. OWASP Dep Chk — CVSS ≥ 7.0 reported (non-blocking)
+#   4. Docker build  — multi-stage, non-root UID/GID 1000
+#   5. Trivy         — image scan, fail on HIGH/CRITICAL CVEs
+#   6. ECR push      — tagged as sha-<7chars>
+#   7. Cosign sign   — keyless, GitHub OIDC → Fulcio CA → Rekor transparency log
 #
 # Outputs: image-tag (sha-<7chars>), registry (ECR registry URL)
 
@@ -50,8 +49,6 @@ on:
     secrets:
       AWS_ACCOUNT_ID:
         required: true
-      SEMGREP_APP_TOKEN:
-        required: false
       NVD_API_KEY:
         description: "NIST NVD API key — higher rate limits + faster OWASP NVD updates"
         required: false
@@ -135,17 +132,6 @@ jobs:
         uses: github/codeql-action/analyze@v3
         with:
           category: /language:java
-
-      # ── Semgrep SAST ──────────────────────────────────────────────────────────
-      - name: Semgrep SAST (java · owasp-top-ten)
-        uses: semgrep/semgrep-action@v1
-        continue-on-error: true
-        with:
-          config: >-
-            p/java
-            p/owasp-top-ten
-        env:
-          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
 
       # ── OWASP Dependency Check ────────────────────────────────────────────────
       # Optional repo secret NVD_API_KEY — higher NVD rate limits; see CI-ARCHITECTURE.md

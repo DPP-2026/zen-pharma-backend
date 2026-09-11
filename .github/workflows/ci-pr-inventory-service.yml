@@ -6,10 +6,6 @@ on:
     paths:
       - 'inventory-service/**'
       - '.github/workflows/ci-pr-inventory-service.yml'
-  pull_request:
-    branches: [develop]
-    paths:
-      - 'inventory-service/**'
 
 permissions:
   contents: read

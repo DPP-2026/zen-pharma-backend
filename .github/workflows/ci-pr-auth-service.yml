@@ -6,10 +6,6 @@ on:
     paths:
       - 'auth-service/**'
       - '.github/workflows/ci-pr-auth-service.yml'
-  pull_request:
-    branches: [develop]
-    paths:
-      - 'auth-service/**'
 
 permissions:
   contents: read

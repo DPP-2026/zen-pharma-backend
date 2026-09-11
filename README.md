@@ -1,5 +1,7 @@
 # zen-pharma-backend
 
+> **Interview questions** have been consolidated → see [zen-interview-prep](../zen-interview-prep/README.md)
+
 Spring Boot microservices monorepo for the Zen Pharma platform. Contains 7 backend services built with Java 17 and deployed to AWS EKS via GitOps (ArgoCD).
 
 > **Companion repos** (replace `YOUR_GITHUB_USERNAME` with your GitHub username):

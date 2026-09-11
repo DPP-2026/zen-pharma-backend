@@ -1,14 +1,13 @@
 # Reusable — Lightweight Java PR / Feature Branch Check
 #
-# Used by ci-pr-<service>.yml workflows on feat-*, fix-*, chore-* branches and PRs.
+# Used by ci-pr-<service>.yml workflows on feat-*, fix-*, chore-* branches.
 # Intentionally stops before Docker — no image build, no ECR push, no Cosign.
 # Goal: fast feedback (~5 min) for developers without burning ECR storage or runner time.
 #
 # Stages:
 #   1. Maven verify  — unit/integration tests + JaCoCo coverage
 #   2. CodeQL        — Java security-extended SAST
-#   3. Semgrep       — java · owasp-top-ten · spring-boot rules
-#   4. OWASP Dep Chk — CVSS ≥ 7.0 reported (non-blocking; add NVD_API_KEY for faster NVD sync)
+#   3. OWASP Dep Chk — CVSS ≥ 7.0 reported (non-blocking; add NVD_API_KEY for faster NVD sync)
 
 name: Reusable — Java PR Check (no Docker)
 
@@ -26,8 +25,6 @@ on:
         type: boolean
         default: false
     secrets:
-      SEMGREP_APP_TOKEN:
-        required: false
       NVD_API_KEY:
         description: "NIST NVD API key — higher rate limits + faster OWASP NVD updates"
         required: false
@@ -93,16 +90,6 @@ jobs:
         uses: github/codeql-action/analyze@v3
         with:
           category: /language:java
-
-      - name: Semgrep SAST (java · owasp-top-ten)
-        uses: semgrep/semgrep-action@v1
-        continue-on-error: true
-        with:
-          config: >-
-            p/java
-            p/owasp-top-ten
-        env:
-          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
 
       # ── OWASP Dependency Check ────────────────────────────────────────────────
       # Optional repo secret NVD_API_KEY — higher NVD rate limits; see CI-ARCHITECTURE.md

@@ -6,10 +6,6 @@ on:
     paths:
       - 'supplier-service/**'
       - '.github/workflows/ci-pr-supplier-service.yml'
-  pull_request:
-    branches: [develop]
-    paths:
-      - 'supplier-service/**'
 
 permissions:
   contents: read

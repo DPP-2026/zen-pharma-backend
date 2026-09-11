@@ -38,7 +38,7 @@ DEV: fully automatic — fast feedback loop. QA: PR review in zen-gitops — QA 
     │                           │ ci-pr-<service>.yml           │                         │
     │                           │ ┌─────────────────────────┐   │                         │
     │                           │ │ Lint · Test             │   │                         │
-    │                           │ │ CodeQL · Semgrep · OWASP│   │                         │
+    │                           │ │ CodeQL · OWASP          │   │                         │
     │                           │ │ (no Docker, no ECR)     │   │                         │
     │                           │ └─────────────────────────┘   │                         │
     │  ✓ Fast feedback (~5 min) │                               │                         │
@@ -50,7 +50,7 @@ DEV: fully automatic — fast feedback loop. QA: PR review in zen-gitops — QA 
     │                           │ ┌─────────────────────────┐   │                         │
     │                           │ │ Job: build              │   │                         │
     │                           │ │  Maven/npm              │   │                         │
-    │                           │ │  CodeQL · Semgrep · OWASP│   │                         │
+    │                           │ │  CodeQL · OWASP         │   │                         │
     │                           │ │  Docker build           │   │                         │
     │                           │ │  Trivy scan             │   │                         │
     │                           │ │  ECR push → sha-abc1234 │   │                         │
@@ -114,14 +114,14 @@ zen-pharma-backend/
     └── workflows/
         │
         │  ── Reusable building blocks ──────────────────────────────────────────
-        ├── _java-build.yml          ← Full build: Maven + CodeQL + Semgrep +
-        │                                          OWASP + Trivy + ECR + Cosign
-        ├── _node-build.yml          ← Full build: npm + CodeQL + Semgrep +
-        │                                          audit + Trivy + ECR + Cosign
-        ├── _java-pr-check.yml       ← Lightweight: Maven + CodeQL + Semgrep +
-        │                                           OWASP  (no Docker, no ECR)
-        ├── _node-pr-check.yml       ← Lightweight: npm + CodeQL + Semgrep +
-        │                                           audit  (no Docker, no ECR)
+        ├── _java-build.yml          ← Full build: Maven + CodeQL + OWASP +
+        │                                          Trivy + ECR + Cosign
+        ├── _node-build.yml          ← Full build: npm + CodeQL + audit +
+        │                                          Trivy + ECR + Cosign
+        ├── _java-pr-check.yml       ← Lightweight: Maven + CodeQL + OWASP
+        │                                           (no Docker, no ECR)
+        ├── _node-pr-check.yml       ← Lightweight: npm + CodeQL + audit
+        │                                           (no Docker, no ECR)
         │
         │  ── Feature branch checks (feat-*, fix-*, chore-*) ───────────────────
         ├── ci-pr-api-gateway.yml
@@ -157,10 +157,12 @@ zen-pharma-backend/
 
 | Event | Branches | Workflow triggered | What runs |
 |---|---|---|---|
-| `push` | `feat-*`, `fix-*`, `chore-*` | `ci-pr-<service>.yml` | Lint · Test · CodeQL · Semgrep · OWASP |
-| `pull_request` | target: `develop` | `ci-pr-<service>.yml` | Same as above |
+| `push` | `feat-*`, `fix-*`, `chore-*` | `ci-pr-<service>.yml` | Lint · Test · CodeQL · OWASP |
 | `push` | `develop`, `release/**` | `ci-<service>.yml` | Full build + ECR + DEV deploy + open QA PR |
 | `workflow_dispatch` | any | `promote-prod.yml` | Read QA tag → open PROD PR |
+
+> **Why is there no `pull_request` trigger for the PR-check workflow?**
+> `ci-pr-<service>.yml` used to also trigger on `pull_request` into `develop`, in addition to `push` on `feat-*/fix-*/chore-*`. Since a student's PR is opened from a branch inside their own repo (not a cross-repo fork-to-upstream PR), both triggers fired for the same commit SHA — every push while a PR was open ran the identical check twice. GitHub Actions attaches check runs to the commit SHA, not to the event that triggered them, so removing the `pull_request` trigger loses no visibility: the push-triggered check still shows up on the PR automatically. One consequence: a branch that doesn't match `feat-*`, `fix-*`, or `chore-*` won't get any automatic CI check on its PR — make sure your branch name follows the convention.
 
 > **Why path filters on every workflow?**  
 > This is a monorepo with 7 services. Without path filters, pushing a one-line change to `notification-service/` would trigger all 7 pipelines — 6 unnecessary builds. Each workflow is scoped to its own service directory (`notification-service/**`) so only the affected service rebuilds. The exception: changes to the workflow file itself (`ci-notification.yml`) also trigger a run, so CI configuration changes are validated.
@@ -176,11 +178,12 @@ zen-pharma-backend/
 ┌────────────────────────────────────────────────────────────────────────┐
 │  TIER 1 — Feature Branch (ci-pr-*.yml)                                 │
 │                                                                        │
-│  Trigger: push to feat-* / fix-* / chore-*,  or PR → develop          │
+│  Trigger: push to feat-* / fix-* / chore-*                            │
+│           (check appears automatically on any PR from that branch)     │
 │  Goal:    fast feedback to developer, no side-effects                  │
 │                                                                        │
 │  Maven verify (+ Postgres if needed)                                   │
-│  → CodeQL  → Semgrep  → OWASP Dependency Check                        │
+│  → CodeQL  → OWASP Dependency Check                                   │
 │                                                                        │
 │  No Docker build.  No ECR push.  No GitOps update.  (~5 min)          │
 └────────────────────────────────────────────────────────────────────────┘
@@ -191,7 +194,7 @@ zen-pharma-backend/
 │                                                                        │
 │  Job 1 · build                                                         │
 │    Maven verify / npm ci  (+ Postgres container if needed)             │
-│    CodeQL · Semgrep · OWASP Dep Check                                  │
+│    CodeQL · OWASP Dep Check                                            │
 │    Docker build (non-root UID 1000)                                    │
 │    Trivy — fail on HIGH / CRITICAL                                     │
 │    ECR push  →  image tag: sha-<7chars>                                │
@@ -311,7 +314,6 @@ Common **DevSecOps categories** and **widely used tools** (examples), followed b
 | Category | Tool / mechanism | Where it runs | Notes |
 |----------|------------------|---------------|--------|
 | SAST | **CodeQL** (`security-extended`) | `_java-pr-check.yml`, `_java-build.yml`, `_node-pr-check.yml`, `_node-build.yml` | SARIF uploaded to GitHub **Code scanning** when org/repo settings allow |
-| SAST | **Semgrep** (`p/java`, `p/spring-boot`, `p/javascript`, `p/nodejs`, `p/owasp-top-ten`, etc.) | Same reusable workflows | Optional `SEMGREP_APP_TOKEN` for Semgrep Cloud dashboards |
 | SCA (Node) | **`npm audit`** (fail on HIGH/CRITICAL) | `_node-pr-check.yml`, `_node-build.yml` | |
 | SCA (Java) | **OWASP Dependency Check** (Maven plugin) | All Java `ci-pr-*.yml` / `ci-*.yml` via `_java-pr-check.yml`, `_java-build.yml` | Add optional repo secret **`NVD_API_KEY`** for faster NVD API sync (see [NVD API key](#nvd-api-key-owasp-dependency-check)) |
 | Secrets in repo | **GitHub Secret scanning** | GitHub platform (enabled under repo Code security settings) | Scans all commits and PRs automatically; no CI runner time or step required |
@@ -349,7 +351,7 @@ Common **DevSecOps categories** and **widely used tools** (examples), followed b
 
 ### Stage 2 — SAST (Static Application Security Testing)
 
-Both SAST tools run on every push — feature branch checks and full builds alike. Finding a security issue on a feature branch is far cheaper than finding it after it's merged.
+SAST runs on every push — feature branch checks and full builds alike. Finding a security issue on a feature branch is far cheaper than finding it after it's merged.
 
 #### CodeQL
 
@@ -361,28 +363,13 @@ Both SAST tools run on every push — feature branch checks and full builds alik
 | What it catches | SQL injection flowing through 3 service layers, path traversal assembled across methods, XSS sinks reached via indirect calls, insecure deserialization |
 | What it misses | Framework-specific misconfigurations — Spring Boot CSRF disabled, actuator endpoints exposed — these are config patterns, not data flow issues |
 | Results | Uploaded as SARIF to the GitHub Security tab |
-| Fail condition | Any finding from `security-extended` queries |
+| Fail condition | None — findings are advisory. They're uploaded to the Security tab for visibility but do not fail the job |
 
 > **Why must CodeQL initialize BEFORE the Maven build step?**  
 > CodeQL instruments the compilation process to collect call graph and type information. If you run CodeQL after Maven has already compiled, the instrumentation hooks were never in place and CodeQL produces a much weaker analysis — or fails entirely. The `codeql-action/init` step must run before `mvn verify`.
 
-#### Semgrep
-
-| | Detail |
-|---|---|
-| Tool | Semgrep (`semgrep/semgrep-action`) |
-| Rule sets | `p/java` + `p/owasp-top-ten` + `p/spring-boot` (Java) / `p/nodejs` + `p/owasp-top-ten` (Node) |
-| How it works | Pattern matching on the Abstract Syntax Tree — fast, no compilation needed |
-| What it catches | Spring Boot CSRF disabled, actuator endpoints without auth, missing `@PreAuthorize`, hardcoded secrets, CORS wildcard, insecure HTTP configs, OWASP Top 10 anti-patterns |
-| What it misses | Complex multi-step data flow vulnerabilities — it matches patterns, not how data flows across method boundaries |
-| Results | Build log + Semgrep cloud dashboard (if `SEMGREP_APP_TOKEN` configured) |
-| Fail condition | Any rule violation |
-
-> **Why two SAST tools? Is that overkill?**  
-> They cover genuinely different surfaces with minimal overlap. CodeQL builds a full semantic model of your code and finds complex vulnerabilities that span multiple files — a SQL injection that's assembled across three service layers. Semgrep matches patterns on the AST and excels at framework-specific misconfigurations — things like Spring Boot having CSRF protection disabled or an actuator endpoint exposed without authentication. Neither tool catches what the other specialises in. For a pharma application with compliance requirements, both are warranted. If you want to simplify, drop Semgrep and keep CodeQL — it is the more thorough of the two.
-
-> **Why `p/spring-boot` specifically?**  
-> Spring Boot has many security footguns that are not obvious: actuator endpoints enabled by default, CSRF disabled in REST API configurations, permissive CORS configs, missing method-level security annotations. The `p/spring-boot` ruleset is maintained by the Semgrep community specifically for these patterns. Generic Java rules would miss them.
+> **Why CodeQL only, not both CodeQL and Semgrep?**  
+> CodeQL and Semgrep genuinely covered different surfaces — CodeQL's semantic data-flow model catches multi-file vulnerabilities like SQL injection assembled across service layers; Semgrep's pattern matching caught framework-specific misconfigurations like Spring Boot CSRF disabled or an exposed actuator endpoint. Keeping only CodeQL means one less external vendor, one less optional secret (`SEMGREP_APP_TOKEN`), and every SAST finding lands in the same GitHub Security tab that Trivy's container scan already uses — one consistent scanning pattern instead of two. The trade-off: Semgrep's Spring Boot misconfiguration rules are no longer checked by this pipeline. For a training curriculum, the reduction in tool count and mental overhead outweighs that narrower slice of coverage — teams with stricter compliance requirements should keep both.
 
 ---
 
@@ -532,7 +519,6 @@ Stage                     ci-pr-*.yml       ci-*.yml
 Unit tests                     ✓                ✓
 Code coverage (JaCoCo/Jest)    ✓                ✓
 CodeQL SAST                    ✓                ✓
-Semgrep SAST                   ✓                ✓
 OWASP Dependency Check (Java)  ✓                ✓
 npm audit (Node)               ✓                ✓
 Docker build                   ✗                ✓
@@ -595,7 +581,6 @@ Same inputs as Java equivalents with `node-version` (default `20`) replacing `ne
 |---|---|---|
 | `AWS_ACCOUNT_ID` | all `ci-*.yml` | 12-digit AWS account ID for ECR URL construction |
 | `GITOPS_TOKEN` | all `ci-*.yml`, `promote-prod.yml` | GitHub PAT or App token with `contents: write` on `chandika-s/zen-gitops` |
-| `SEMGREP_APP_TOKEN` | `_java-build.yml`, `_node-build.yml` | Semgrep cloud token (optional — OSS rules work without it) |
 | `NVD_API_KEY` | `_java-pr-check.yml`, `_java-build.yml` (when OWASP enabled) | NIST NVD API key — higher rate limits for OWASP Dependency Check (optional but recommended) |
 
 > **Why a dedicated `GITOPS_TOKEN` instead of using `GITHUB_TOKEN`?**  
@@ -736,7 +721,6 @@ Go to **Settings → Secrets and variables → Actions → New repository secret
 |--------|-------|----------|
 | `AWS_ACCOUNT_ID` | Your 12-digit AWS account ID | Yes |
 | `GITOPS_TOKEN` | GitHub PAT with `repo` scope on `chandika-s/zen-gitops` | Yes |
-| `SEMGREP_APP_TOKEN` | Token from semgrep.dev (for dashboard integration) | Optional |
 
 ### Step 7 — Create GitHub Environments
 

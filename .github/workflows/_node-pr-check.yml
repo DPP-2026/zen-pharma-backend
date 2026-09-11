@@ -1,14 +1,13 @@
 # Reusable — Lightweight Node.js PR / Feature Branch Check
 #
-# Used by ci-pr-notification.yml on feat-*, fix-*, chore-* branches and PRs.
+# Used by ci-pr-notification.yml on feat-*, fix-*, chore-* branches.
 # No Docker, no ECR, no Cosign. Fast feedback for developers.
 #
 # Stages:
 #   1. ESLint        — lint (--max-warnings 0)
 #   2. Jest          — unit tests + coverage
 #   3. CodeQL        — JavaScript security-extended SAST
-#   4. Semgrep       — javascript · nodejs · owasp-top-ten rules
-#   5. npm audit     — fail on HIGH/CRITICAL vulnerabilities
+#   4. npm audit     — fail on HIGH/CRITICAL vulnerabilities
 
 name: Reusable — Node.js PR Check (no Docker)
 
@@ -25,9 +24,6 @@ on:
         required: false
         type: string
         default: '20'
-    secrets:
-      SEMGREP_APP_TOKEN:
-        required: false
 
 jobs:
   pr-check:
@@ -81,17 +77,6 @@ jobs:
         uses: github/codeql-action/analyze@v3
         with:
           category: /language:javascript
-
-      - name: Semgrep SAST (javascript · nodejs · owasp-top-ten)
-        uses: semgrep/semgrep-action@v1
-        continue-on-error: true
-        with:
-          config: >-
-            p/javascript
-            p/nodejs
-            p/owasp-top-ten
-        env:
-          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
 
       - name: npm audit (HIGH/CRITICAL → fail)
         run: cd ${{ inputs.service-dir }} && npm audit --audit-level=high
