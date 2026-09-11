@@ -11,6 +11,8 @@ on:
       - 'manufacturing-service/**'
       - '.github/workflows/ci-manufacturing-service.yml'
 
+  workflow_dispatch: {}
+
 permissions:
   id-token: write
   contents: read
