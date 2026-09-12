@@ -11,6 +11,8 @@ on:
       - 'inventory-service/**'
       - '.github/workflows/ci-inventory-service.yml'
 
+  workflow_dispatch: {}
+
 permissions:
   id-token: write
   contents: read

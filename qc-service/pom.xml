@@ -10,7 +10,7 @@
   </parent>
   <groupId>com.pharma</groupId>
   <artifactId>qc-service</artifactId>
-  <version>1.0.4</version>
+  <version>5.0.0</version>
   <name>qc-service</name>
   <description>Quality Control Service</description>
 
